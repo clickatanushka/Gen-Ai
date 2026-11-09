@@ -1,0 +1,9 @@
+question,option_a,option_b,option_c,option_d,correct,explanation
+What does observability mean for a GenAI app?,Making the app look good,Being able to see what the app is doing while it runs,Training the model on more data,Hiding errors from users,B,"Observability is seeing the app's behaviour from outside through logs, metrics and traces."
+Which signal follows ONE request step by step with timings?,A log,A metric,A trace,A guardrail,C,"A trace shows each step of one request, for example search 0.15 s and LLM 2 s."
+"In a typical RAG request, which step usually takes the most time?",Embedding the question,Vector search,The LLM writing the answer,Reading the .env file,C,Generation writes the answer token by token and usually takes most of the time.
+What is p95 latency?,The average response time,The time 95 out of 100 requests are faster than,95% of the cost,The fastest response,B,p95 shows the slow experiences that an average can hide.
+Why are tokens per question worth watching?,Tokens decide the bill,Tokens decide the font size,Tokens are passwords,Tokens never change,A,"Providers charge per token, so a jump in tokens is a jump in cost."
+Where should API keys be kept?,In the code,In a public GitHub repo,In a .env file that is not committed,In the prompt,C,Keys in code or on GitHub can be stolen; a git-ignored .env keeps them private.
+What does faithfulness check?,Whether the answer is short,Whether every claim is supported by the retrieved sources,Whether the user is happy,Whether the PDF is long,B,Faithfulness asks if the answer is backed by the passages the system found.
+"What is the capstone project, DocuMind?",A new LLM,An assistant that answers questions from company PDFs with the page as proof,An image generator,A vector database company,B,DocuMind is a RAG assistant that uses every concept from this course.
