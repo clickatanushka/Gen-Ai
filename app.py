@@ -1,5 +1,8 @@
+import ipaddress
 import os
 import re
+import socket
+from urllib.parse import urljoin, urlsplit
 
 import streamlit as st
 import requests
@@ -40,6 +43,7 @@ api_key = st.sidebar.text_input(
     type="password",
     value=os.getenv("GOOGLE_API_KEY", ""),
 )
+api_key = api_key.strip()
 st.sidebar.caption(
     "Your key is used for this session. Do not share it or upload it to a public repository."
 )
@@ -60,20 +64,82 @@ extra_text = st.text_area(
 # -----------------------------------------------------------------------------
 # Text collection and cleaning
 # -----------------------------------------------------------------------------
+MAX_SOURCE_BYTES = 5 * 1024 * 1024
+MAX_REDIRECTS = 5
+
+
 def clean_text(text):
     """Normalize whitespace in scraped or user-provided text."""
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def fetch_article(url):
-    """Download an article page and extract its main readable text."""
+def validate_public_url(url):
+    """Allow only HTTP(S) URLs whose resolved addresses are publicly routable."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Only public HTTP or HTTPS URLs are allowed.")
+    if parsed.username or parsed.password:
+        raise ValueError("URLs containing credentials are not allowed.")
+
+    try:
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        addresses = socket.getaddrinfo(
+            parsed.hostname, port, type=socket.SOCK_STREAM
+        )
+    except (OSError, ValueError) as exc:
+        raise ValueError("The URL host could not be resolved safely.") from exc
+
+    if not addresses or any(
+        not ipaddress.ip_address(address[4][0]).is_global
+        for address in addresses
+    ):
+        raise ValueError("URLs resolving to private or reserved addresses are not allowed.")
+
+    return parsed.geturl()
+
+
+def fetch_url_content(url):
+    """Fetch a public URL with bounded redirects, time, and response size."""
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; ExamStudyAssistant/1.0)"
     }
-    response = requests.get(url, headers=headers, timeout=20)
-    response.raise_for_status()
+    current_url = url
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        current_url = validate_public_url(current_url)
+        response = requests.get(
+            current_url,
+            headers=headers,
+            timeout=20,
+            allow_redirects=False,
+            stream=True,
+        )
+        try:
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("Location")
+                if not location or redirect_count == MAX_REDIRECTS:
+                    raise ValueError("The source URL redirected too many times.")
+                current_url = urljoin(current_url, location)
+                continue
+
+            response.raise_for_status()
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    content.extend(chunk)
+                    if len(content) > MAX_SOURCE_BYTES:
+                        raise ValueError("The source exceeds the 5 MB download limit.")
+            return bytes(content)
+        finally:
+            response.close()
+
+    raise ValueError("The source URL redirected too many times.")
+
+
+def fetch_article(url):
+    """Download an article page and extract its main readable text."""
+    content = fetch_url_content(url)
+    soup = BeautifulSoup(content, "html.parser")
 
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
@@ -102,7 +168,8 @@ def collect_sources():
 
     if rss_url.strip():
         try:
-            feed = feedparser.parse(rss_url.strip())
+            feed_content = fetch_url_content(rss_url.strip())
+            feed = feedparser.parse(feed_content)
 
             if getattr(feed, "bozo", False) and not feed.entries:
                 errors.append("Could not read the RSS feed. Check the URL.")
@@ -264,7 +331,7 @@ def get_gemini_model(api_key, max_output_tokens=900, temperature=0.2):
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         timeout=45,
-        max_retries=10,
+        max_retries=0,
     )
 
 
@@ -544,7 +611,15 @@ if build:
                     )
 
         except Exception as exc:
-            st.error(f"Could not build the knowledge base: {exc}")
+            error_message = str(exc)
+            if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                st.error(
+                    "Google rejected this API key. Copy a valid Gemini API key "
+                    "from Google AI Studio, make sure Gemini API access is enabled "
+                    "for its project, and paste it here without quotes."
+                )
+            else:
+                st.error(f"Could not build the knowledge base: {error_message}")
 
 
 # -----------------------------------------------------------------------------
